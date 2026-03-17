@@ -1,0 +1,113 @@
+import streamlit as st
+import pandas as pd
+import numpy as np
+import torch
+import torch.nn as nn
+import matplotlib.pyplot as plt
+
+st.set_page_config(page_title="Gbekie Trap AI", layout="wide")
+st.title("Gbekie Trap Demonstrator")
+st.markdown("Transformer predicts Ramadan study performance → multi-agent system reveals **Language Trap** (oscillation) → **Gbekie Condition** (auto-damping) restores stability.")
+
+uploaded_file = st.file_uploader("Upload ramadan_full_model.csv", type="csv")
+
+if uploaded_file is not None:
+    df = pd.read_csv(uploaded_file)
+    st.success("Data loaded!")
+else:
+    st.info("Using sample data (30 days)")
+    df = pd.DataFrame({
+        'Sleep_hours': np.random.normal(5.0, 1.2, 30),
+        'Fasting_drag_F': np.linspace(1.0, 0.88, 30),
+        'Prayer_penalty_P': np.random.normal(0.92, 0.04, 30),
+        'Hydration_drag_H': np.linspace(1.0, 0.78, 30),
+        'Study_performance': np.random.uniform(1.0, 5.5, 30)
+    })
+
+features = ['Sleep_hours', 'Fasting_drag_F', 'Prayer_penalty_P', 'Hydration_drag_H']
+X = torch.tensor(df[features].values, dtype=torch.float32)
+y = torch.tensor(df['Study_performance'].values, dtype=torch.float32).unsqueeze(1)
+
+class GbekieTransformer(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.encoder_layer = nn.TransformerEncoderLayer(d_model=4, nhead=2, dim_feedforward=16, dropout=0.1, batch_first=True)
+        self.encoder = nn.TransformerEncoder(self.encoder_layer, num_layers=2)
+        self.fc = nn.Linear(4, 1)
+        self.attn_weights = None
+
+    def forward(self, x):
+        def hook(module, inp, out):
+            self.attn_weights = module.self_attn.attn_output_weights.detach().mean(dim=1).cpu().numpy()
+        h = self.encoder.layers[0].self_attn.register_forward_hook(hook)
+        x = x.unsqueeze(1)
+        x = self.encoder(x)
+        out = self.fc(x.squeeze(1))
+        h.remove()
+        return out
+
+model = GbekieTransformer()
+optimizer = torch.optim.Adam(model.parameters(), lr=0.005)
+criterion = nn.MSELoss()
+
+if st.button("Train Transformer (10 epochs)"):
+    with st.spinner("Training..."):
+        for epoch in range(10):
+            optimizer.zero_grad()
+            pred = model(X)
+            loss = criterion(pred, y)
+            loss.backward()
+            optimizer.step()
+        st.success("Training complete!")
+
+with torch.no_grad():
+    preds = model(X).squeeze().numpy()
+
+st.subheader("Predictions vs Actual")
+fig, ax = plt.subplots()
+ax.plot(df['Study_performance'], label="Actual", color="lime")
+ax.plot(preds, label="Predicted", color="cyan", linestyle="--")
+ax.legend()
+st.pyplot(fig)
+
+st.subheader("Attention Weights")
+with torch.no_grad():
+    _ = model(X)
+if model.attn_weights is not None:
+    fig, ax = plt.subplots()
+    im = ax.imshow(model.attn_weights, cmap='viridis')
+    plt.colorbar(im)
+    st.pyplot(fig)
+
+# Multi-Agent Trap
+st.subheader("Language Trap Simulation")
+N_AGENTS = st.slider("Agents", 2, 20, 10)
+PRED_STEPS = st.slider("Steps", 10, 60, 30)
+if st.button("Run Simulation"):
+    alpha = 0.0
+    history = np.zeros((PRED_STEPS + 1, len(df), N_AGENTS))
+    initial = preds
+    history[0] = np.tile(initial, (N_AGENTS, 1)).T
+
+    for step in range(PRED_STEPS):
+        current = history[step]
+        new_preds = np.zeros_like(current)
+        for i in range(N_AGENTS):
+            others_mean = np.mean(np.delete(current, i, axis=1), axis=1)
+            new_preds[:, i] = (1 - alpha) * current[:, i] + alpha * (1 - others_mean)
+        osc = np.std(new_preds - current)
+        if osc > 0.4:
+            alpha = min(0.5, alpha + 0.08)
+        else:
+            alpha = max(0.0, alpha - 0.015)
+        history[step + 1] = new_preds
+
+    humility = 1 - (alpha / 0.5)
+    st.metric("Final α", f"{alpha:.2f}")
+    st.metric("Humility Score", f"{humility:.2f}")
+
+    fig, ax = plt.subplots()
+    for i in range(N_AGENTS):
+        ax.plot(history[:, :, i].mean(axis=1), alpha=0.7)
+    ax.axhline(2.0, color='red', linestyle='--')
+    st.pyplot(fig)
